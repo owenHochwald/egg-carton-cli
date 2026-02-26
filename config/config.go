@@ -1,0 +1,182 @@
+package config
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/joho/godotenv"
+)
+
+// Config holds the CLI configuration
+type Config struct {
+	APIEndpoint   string        `json:"api_endpoint"`
+	CognitoConfig CognitoConfig `json:"cognito"`
+	TokenPath     string        `json:"-"` // Not serialized
+}
+
+// CognitoConfig holds Cognito-specific configuration
+type CognitoConfig struct {
+	UserPoolID string `json:"user_pool_id"`
+	ClientID   string `json:"client_id"`
+	Domain     string `json:"domain"`
+	Region     string `json:"region"`
+}
+
+// TokenData holds the OAuth tokens
+type TokenData struct {
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	TokenType    string `json:"token_type"`
+	IssuedAt     int64  `json:"issued_at"` // Unix timestamp when token was received
+}
+
+// For now, you can hardcode the values from terraform output
+func LoadConfig() (*Config, error) {
+	err := godotenv.Load()
+	if err != nil {
+		fmt.Println("An error occured while loading .env file")
+	}
+	APIEndpoint := os.Getenv("API_ENDPOINT")
+	UserPoolID := os.Getenv("COGNITO_USER_POOL_ID")
+	ClientID := os.Getenv("COGNITO_CLIENT_ID")
+	Domain := os.Getenv("COGNITO_DOMAIN")
+	Region := os.Getenv("COGNITO_REGION")
+
+	if APIEndpoint == "" || UserPoolID == "" || ClientID == "" || Domain == "" || Region == "" {
+		return nil, fmt.Errorf("missing required environment variables")
+	}
+	// TODO: Get these from environment variables or config file
+	// For now, hardcode from your terraform output:
+	config := &Config{
+		APIEndpoint: APIEndpoint,
+		CognitoConfig: CognitoConfig{
+			UserPoolID: UserPoolID,
+			ClientID:   ClientID,
+			Domain:     Domain,
+			Region:     Region,
+		},
+	}
+
+	// Set token path
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	}
+	config.TokenPath = filepath.Join(home, ".eggcarton", "credentials.json")
+
+	return config, nil
+}
+
+// Should save tokens to ~/.eggcarton/credentials.json with 0600 permissions
+func (c *Config) SaveTokens(tokens *TokenData) error {
+	// Create directory if it doesn't exist
+	dir := filepath.Dir(c.TokenPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Marshal tokens to JSON
+	b, err := json.MarshalIndent(tokens, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal tokens: %w", err)
+	}
+
+	// Write to file with secure permissions
+	if err := os.WriteFile(c.TokenPath, b, 0600); err != nil {
+		return fmt.Errorf("failed to write tokens to file: %w", err)
+	}
+
+	return nil
+}
+
+// Should load tokens from ~/.eggcarton/credentials.json
+func (c *Config) LoadTokens() (*TokenData, error) {
+	data, err := os.ReadFile(c.TokenPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var tokens TokenData
+	err = json.Unmarshal(data, &tokens)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tokens: %w", err)
+	}
+
+	return &tokens, nil
+}
+
+// Should check if access token is still valid (not expired)
+func (t *TokenData) IsTokenValid() bool {
+	now := time.Now().Unix()
+	if now > t.IssuedAt+int64(t.ExpiresIn)-300 { // 5 minute buffer
+		return false
+	}
+	return true
+}
+
+// Returns the OAuth redirect URI for the callback server
+func (c *Config) GetRedirectURI() string {
+	return "http://localhost:8080/callback"
+}
+
+// Returns the full authorization URL for Cognito
+func (c *Config) GetAuthorizationURL() string {
+
+	return fmt.Sprintf("https://%s/oauth2/authorize", c.CognitoConfig.Domain)
+}
+
+// Returns the token exchange endpoint
+func (c *Config) GetTokenURL() string {
+	return fmt.Sprintf("https://%s/oauth2/token", c.CognitoConfig.Domain)
+}
+
+// Returns the API base URL
+func (c *Config) GetAPIBaseURL() string {
+	return c.APIEndpoint
+}
+
+// GetOwner extracts the owner (user ID) from the access token
+func (c *Config) GetOwner() (string, error) {
+	tokens, err := c.LoadTokens()
+	if err != nil {
+		return "", fmt.Errorf("failed to load tokens: %w", err)
+	}
+
+	// Extract owner (sub claim) from the access token JWT
+	return extractOwnerFromToken(tokens.AccessToken)
+}
+
+// extractOwnerFromToken decodes JWT and extracts the 'sub' claim (user ID)
+func extractOwnerFromToken(accessToken string) (string, error) {
+	parts := strings.Split(accessToken, ".")
+
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT token format")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode JWT payload: %w", err)
+	}
+
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+
+	if err = json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	if claims.Sub == "" {
+		return "", fmt.Errorf("sub claim not found in token")
+	}
+
+	return claims.Sub, nil
+}
