@@ -33,3 +33,5 @@ Thumbs.db
 credentials.json
 .eggcarton/
 .env
+
+.claude
