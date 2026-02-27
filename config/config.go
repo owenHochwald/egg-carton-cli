@@ -37,30 +37,56 @@ type TokenData struct {
 	IssuedAt     int64  `json:"issued_at"` // Unix timestamp when token was received
 }
 
-// For now, you can hardcode the values from terraform output
-func LoadConfig() (*Config, error) {
-	err := godotenv.Load()
-	if err != nil {
-		fmt.Println("An error occured while loading .env file")
-	}
-	APIEndpoint := os.Getenv("API_ENDPOINT")
-	UserPoolID := os.Getenv("COGNITO_USER_POOL_ID")
-	ClientID := os.Getenv("COGNITO_CLIENT_ID")
-	Domain := os.Getenv("COGNITO_DOMAIN")
-	Region := os.Getenv("COGNITO_REGION")
+// Set by main.go from ldflags values before LoadConfig is called.
+// When all five are non-empty the binary is self-contained; users need no .env file.
+var (
+	CompiledAPIEndpoint   string
+	CompiledUserPoolID    string
+	CompiledClientID      string
+	CompiledCognitoDomain string
+	CompiledRegion        string
+)
 
-	if APIEndpoint == "" || UserPoolID == "" || ClientID == "" || Domain == "" || Region == "" {
-		return nil, fmt.Errorf("missing required environment variables")
+// LoadConfig returns configuration for the CLI.
+// Priority: compiled-in ldflags values (release builds) → env vars / .env file (local dev).
+func LoadConfig() (*Config, error) {
+	var (
+		apiEndpoint string
+		userPoolID  string
+		clientID    string
+		domain      string
+		region      string
+	)
+
+	// Use compiled-in values when all five are present (standard release binary).
+	if CompiledAPIEndpoint != "" && CompiledUserPoolID != "" &&
+		CompiledClientID != "" && CompiledCognitoDomain != "" && CompiledRegion != "" {
+		apiEndpoint = CompiledAPIEndpoint
+		userPoolID = CompiledUserPoolID
+		clientID = CompiledClientID
+		domain = CompiledCognitoDomain
+		region = CompiledRegion
+	} else {
+		// Fall back to .env file + environment variables (local dev override).
+		_ = godotenv.Load() // ignore error — .env is optional
+		apiEndpoint = os.Getenv("API_ENDPOINT")
+		userPoolID = os.Getenv("COGNITO_USER_POOL_ID")
+		clientID = os.Getenv("COGNITO_CLIENT_ID")
+		domain = os.Getenv("COGNITO_DOMAIN")
+		region = os.Getenv("COGNITO_REGION")
 	}
-	// TODO: Get these from environment variables or config file
-	// For now, hardcode from your terraform output:
-	config := &Config{
-		APIEndpoint: APIEndpoint,
+
+	if apiEndpoint == "" || userPoolID == "" || clientID == "" || domain == "" || region == "" {
+		return nil, fmt.Errorf("configuration not available — this binary may not have been built with required config values")
+	}
+
+	cfg := &Config{
+		APIEndpoint: apiEndpoint,
 		CognitoConfig: CognitoConfig{
-			UserPoolID: UserPoolID,
-			ClientID:   ClientID,
-			Domain:     Domain,
-			Region:     Region,
+			UserPoolID: userPoolID,
+			ClientID:   clientID,
+			Domain:     domain,
+			Region:     region,
 		},
 	}
 
@@ -69,9 +95,9 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
-	config.TokenPath = filepath.Join(home, ".eggcarton", "credentials.json")
+	cfg.TokenPath = filepath.Join(home, ".eggcarton", "credentials.json")
 
-	return config, nil
+	return cfg, nil
 }
 
 // Should save tokens to ~/.eggcarton/credentials.json with 0600 permissions

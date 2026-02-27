@@ -5,7 +5,25 @@ import (
 	"os"
 
 	"github.com/owenHochwald/egg-carton/cli/commands"
+	"github.com/owenHochwald/egg-carton/cli/config"
 	"github.com/spf13/cobra"
+)
+
+// Build-time version metadata — set via ldflags
+var (
+	Version   string
+	BuildTime string
+	GitCommit string
+)
+
+// Compiled-in config values — set via ldflags at build time.
+// Zero value is intentional: LoadConfig falls back to env vars when these are empty (local dev).
+var (
+	compiledAPIEndpoint   string
+	compiledUserPoolID    string
+	compiledClientID      string
+	compiledCognitoDomain string
+	compiledRegion        string
 )
 
 var rootCmd = &cobra.Command{
@@ -25,6 +43,13 @@ with Cognito authentication via OAuth PKCE flow.`,
 }
 
 func main() {
+	// Wire compiled-in config values into the config package before any command runs
+	config.CompiledAPIEndpoint = compiledAPIEndpoint
+	config.CompiledUserPoolID = compiledUserPoolID
+	config.CompiledClientID = compiledClientID
+	config.CompiledCognitoDomain = compiledCognitoDomain
+	config.CompiledRegion = compiledRegion
+
 	// Add all subcommands
 	rootCmd.AddCommand(commands.LoginCmd)
 	rootCmd.AddCommand(commands.AddCmd)
