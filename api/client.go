@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Client represents the API client for Lambda functions
@@ -22,7 +23,7 @@ func NewClient(baseURL, accessToken string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		token:   accessToken,
-		client:  &http.Client{},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -58,15 +59,15 @@ func (c *Client) PutEgg(owner, key, value string) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := c.doRequest("POST", "/eggs", bytes.NewBuffer(data))
+	resp, err := c.doRequest("POST", "/eggs", bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	defer req.Body.Close()
+	defer resp.Body.Close()
 
-	if req.StatusCode != http.StatusOK && req.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(req.Body)
-		return fmt.Errorf("failed to put egg (status %d) %s", req.StatusCode, body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		_, _ = io.ReadAll(resp.Body)
+		return fmt.Errorf("server rejected the request (status %d) — check your connection and try again", resp.StatusCode)
 	}
 
 	return nil
@@ -82,8 +83,8 @@ func (c *Client) GetEgg(owner string) ([]GetEggResponse, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get egg (status %d) %s", resp.StatusCode, body)
+		_, _ = io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server rejected the request (status %d) — check your connection and try again", resp.StatusCode)
 	}
 
 	var response GetEggsResponse
@@ -103,8 +104,8 @@ func (c *Client) BreakEgg(owner, secretID string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to break egg (status %d) %s", resp.StatusCode, body)
+		_, _ = io.ReadAll(resp.Body)
+		return fmt.Errorf("server rejected the request (status %d) — check your connection and try again", resp.StatusCode)
 	}
 
 	return nil
